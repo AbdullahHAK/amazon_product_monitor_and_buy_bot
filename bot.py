@@ -63,6 +63,8 @@ PLACE_ORDER_SELECTORS = [
 PLACE_ORDER_RE = re.compile(
     r"realiza(r)?\s+(el\s+|tu\s+|su\s+)?pedido|place\s+your\s+order|confirmar\s+(la\s+)?compra", re.I
 )
+# Any checkout button whose label matches this is treated as the final purchase button.
+FINAL_BUTTON_RE = re.compile(r"pedido|comprar|pagar\s+ahora|place|buy|confirm", re.I)
 
 # Buttons that move checkout forward (cart -> checkout, address, payment method).
 CONTINUE_SELECTORS = [
@@ -266,6 +268,16 @@ class AmazonBot(threading.Thread):
     def _sleep(self, seconds):
         self._stop_evt.wait(seconds)
 
+    @staticmethod
+    def _wait_on_page(page, seconds):
+        """Wait while letting Playwright process browser events (a plain sleep would leave page.url stale)."""
+        try:
+            page.wait_for_timeout(seconds * 1000)
+        except PWError as e:
+            raise BrowserClosed() from e
+        if page.is_closed():
+            raise BrowserClosed()
+
     def _monitor(self, ctx, page):
         while not self.stopped:
             active = [p for p in self.products if not p.done]
@@ -335,9 +347,7 @@ class AmazonBot(threading.Thread):
             return False
         self.alert(reason)
         while not self.stopped:
-            self._sleep(2)
-            if page.is_closed():
-                raise BrowserClosed()
+            self._wait_on_page(page, 2)
             if not self._human_needed(page):
                 self.log("Verification completed, continuing.")
                 return True
@@ -356,9 +366,7 @@ class AmazonBot(threading.Thread):
         except PWError:
             pass
         while not self.stopped:
-            self._sleep(2)
-            if page.is_closed():
-                raise BrowserClosed()
+            self._wait_on_page(page, 2)
             try:
                 if "/ap/" not in page.url and self._is_logged_in(page):
                     return True
@@ -525,13 +533,30 @@ class AmazonBot(threading.Thread):
         loc = first_visible(page, DECLINE_SELECTORS)
         if loc:
             return loc
-        try:
-            loc = page.get_by_role("button", name=DECLINE_RE).first
-            if loc.count() and loc.is_visible():
-                return loc
-        except PWError:
-            pass
+        candidates = [
+            page.get_by_role("button", name=DECLINE_RE),
+            page.get_by_role("link", name=DECLINE_RE),
+            # e.g. the Prime sign-up page, where "No gracias" is a plain styled element
+            page.get_by_text(re.compile(r"^\s*no,?\s+gracias\s*$", re.I)),
+        ]
+        for cand in candidates:
+            try:
+                loc = cand.first
+                if loc.count() and loc.is_visible():
+                    return loc
+            except PWError:
+                continue
         return None
+
+    @staticmethod
+    def _button_text(loc) -> str:
+        try:
+            return loc.evaluate(
+                "el => { const b = el.closest('.a-button') || el;"
+                " return [el.value || '', el.getAttribute('aria-label') || '', b.innerText || ''].join(' '); }"
+            )
+        except PWError:
+            return ""
 
     def _complete_checkout(self, page) -> str:
         deadline = time.time() + 120
@@ -566,6 +591,15 @@ class AmazonBot(threading.Thread):
                     continue
 
                 cont = first_visible(page, CONTINUE_SELECTORS)
+                if cont and FINAL_BUTTON_RE.search(self._button_text(cont)):
+                    # Amazon labelled a "continue" slot as the final purchase button.
+                    if self.test_mode:
+                        return "test"
+                    cont.click()
+                    order_clicked = True
+                    deadline = time.time() + 60
+                    self.log("Clicked 'Place order', waiting for Amazon's confirmation...")
+                    continue
                 if cont:
                     cont.click()
                     page.wait_for_timeout(2000)
