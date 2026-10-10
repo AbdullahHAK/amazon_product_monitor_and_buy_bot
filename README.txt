@@ -21,8 +21,9 @@ IMPORTANT
 - If Amazon asks for a CAPTCHA or OTP, the bot beeps and shows "ACTION NEEDED".
   Complete it in the browser window and the bot continues automatically.
 - Set your default address and payment method in Amazon before starting.
-- Keep your Amazon cart empty. Some products only have "Add to cart" (no "Buy now"),
-  and for those the bot checks out the whole cart.
+- If a product has no "Buy now" button (only "Ver opciones de compra"), the bot buys the
+  cheapest seller offer through the cart. Other items in your cart are moved to
+  "Guardar para más tarde" first, so only the monitored product is bought.
 - "Test mode" lets you run a test without buying anything: the bot goes to the final checkout
   page but does NOT click "Place order".
 - Logs and screenshots of every order: click "Open logs folder".

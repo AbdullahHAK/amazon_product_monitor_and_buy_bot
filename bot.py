@@ -43,10 +43,19 @@ if not logger.handlers:
 BUY_NOW_SELECTORS = ["#buy-now-button", "input[name='submit.buy-now']"]
 ADD_TO_CART_SELECTORS = ["#add-to-cart-button", "input[name='submit.add-to-cart']"]
 
+# "Ver opciones de compra" side panel (all offers display) and the cart.
+AOD_ADD_SELECTOR = "#aod-container input[name='submit.addToCart'], #all-offers-display input[name='submit.addToCart']"
+CART_ITEM_SELECTOR = "#sc-active-cart [data-itemtype='active'][data-asin]"
+SAVE_FOR_LATER_SELECTOR = ("input[name^='submit.save-for-later'], input[data-action='save-for-later'], "
+                           "input[value*='Guardar para' i]")
+
 PRICE_SELECTORS = [
     "#corePrice_feature_div .a-price .a-offscreen",
     "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen",
     "#apex_desktop .a-price .a-offscreen",
+    # Sometimes the hidden label is empty; read the visible price instead.
+    "#corePrice_feature_div .a-price:not(.a-text-price)",
+    "#corePriceDisplay_desktop_feature_div .a-price:not(.a-text-price)",
     "#price_inside_buybox",
     "#newBuyBoxPrice",
     "#priceblock_ourprice",
@@ -428,25 +437,63 @@ class AmazonBot(threading.Thread):
                 self.status(p, "Page not found - check URL", "red")
                 return
 
-        buy_button = first_visible(page, BUY_NOW_SELECTORS + ADD_TO_CART_SELECTORS)
-        if not buy_button:
-            if page.locator("#buybox-see-all-buying-choices").count():
-                self.status(p, "Only via 'other sellers' - waiting", "orange")
-            else:
-                self.status(p, f"Out of stock (checked {datetime.now():%H:%M:%S})", "black")
-            return
+        # The variant actually being sold (size/colour) can differ from the ASIN in the link,
+        # so take it from the page's own form; the cart lists items by this ASIN.
+        asin = self._page_asin(page, p)
 
-        price = self._get_price(page)
-        price_txt = f"${price:,.2f}" if price else "price unknown"
+        if first_visible(page, BUY_NOW_SELECTORS + ADD_TO_CART_SELECTORS):
+            price = self._get_price(page)
+            if not self._price_ok(p, price):
+                return
+            self._announce(p, price, "")
+            result = self._buy(page, p, asin)
+        elif page.locator("#buybox-see-all-buying-choices").count():
+            # No Buy Box: the product is only sold through "Ver opciones de compra".
+            offer = self._pick_other_seller_offer(page, p)
+            if not offer:
+                return
+            button, price = offer
+            try:
+                asin = (button.evaluate(
+                    "el => { const f = el.closest('form');"
+                    " const i = f && f.querySelector('input[name=\"items[0.base][asin]\"], input[name=\"ASIN\"]');"
+                    " return i ? i.value : null; }") or asin or "").upper() or None
+            except PWError:
+                pass
+            self._announce(p, price, " from another seller")
+            button.click()
+            page.wait_for_timeout(2500)
+            result = self._checkout_from_cart(page, p, asin)
+        else:
+            self.status(p, f"Out of stock (checked {datetime.now():%H:%M:%S})", "black")
+            return
+        self._handle_result(page, p, result)
+
+    @staticmethod
+    def _page_asin(page, p: Product):
+        try:
+            loc = page.locator("input#ASIN, #addToCart input[name='ASIN']").first
+            if loc.count() and (loc.get_attribute("value") or "").strip():
+                return loc.get_attribute("value").strip().upper()
+        except PWError:
+            pass
+        m = ASIN_RE.search(page.url) or ASIN_RE.search(p.url)
+        return m.group(1).upper() if m else None
+
+    def _price_ok(self, p: Product, price) -> bool:
         if p.max_price is not None and (price is None or price > p.max_price):
+            price_txt = f"${price:,.2f}" if price else "unknown price"
             self.status(p, f"In stock at {price_txt} - above max price", "orange")
-            return
+            return False
+        return True
 
+    def _announce(self, p: Product, price, source):
+        price_txt = f"${price:,.2f}" if price else "price unknown"
         self.status(p, f"IN STOCK ({price_txt}) - buying...", "blue")
-        self.log(f"{p.label} is IN STOCK at {price_txt}. Starting checkout (qty {p.quantity}).")
+        self.log(f"{p.label} is IN STOCK at {price_txt}{source}. Starting checkout (qty {p.quantity}).")
         self.emit({"type": "beep"})
 
-        result = self._buy(page, p)
+    def _handle_result(self, page, p: Product, result):
         if result == "ok":
             p.done = True
             self.screenshot(page, p, "order_placed")
@@ -490,7 +537,7 @@ class AmazonBot(threading.Thread):
         sel.select_option(str(target), force=True)
         page.wait_for_timeout(800)
 
-    def _buy(self, page, p: Product) -> str:
+    def _buy(self, page, p: Product, asin) -> str:
         """Returns 'ok', 'test', 'unknown' (clicked but unconfirmed) or 'failed'."""
         try:
             self._set_quantity(page, p)
@@ -501,14 +548,127 @@ class AmazonBot(threading.Thread):
         buy_now = first_visible(page, BUY_NOW_SELECTORS)
         if buy_now:
             buy_now.click()
-        else:
-            add = first_visible(page, ADD_TO_CART_SELECTORS)
-            if not add:
-                return "failed"
-            add.click()
-            page.wait_for_timeout(2500)
-            page.goto(f"{BASE_URL}/gp/cart/view.html", wait_until="domcontentloaded")
+            return self._complete_checkout(page)
+        add = first_visible(page, ADD_TO_CART_SELECTORS)
+        if not add:
+            return "failed"
+        add.click()
+        page.wait_for_timeout(2500)
+        return self._checkout_from_cart(page, p, asin)
+
+    def _pick_other_seller_offer(self, page, p: Product):
+        """Open 'Ver opciones de compra' and return (add-to-cart button, price) of the cheapest allowed offer."""
+        opener = first_visible(page, [f"#buybox-see-all-buying-choices {s}" for s in ("a", "input", ".a-button-text")]
+                               + ["#buybox-see-all-buying-choices"])
+        if not opener:
+            self.status(p, "Out of stock", "black")
+            return None
+        opener.click()
+        try:
+            page.wait_for_selector(AOD_ADD_SELECTOR, state="attached", timeout=10000)
+        except PWTimeout:
+            self.status(p, f"Other sellers: none in stock (checked {datetime.now():%H:%M:%S})", "black")
+            return None
+        page.wait_for_timeout(1000)
+
+        buttons = page.locator(AOD_ADD_SELECTOR)
+        offers = []
+        for i in range(buttons.count()):
+            btn = buttons.nth(i)
+            try:
+                if not btn.is_visible():
+                    continue
+                # Button ids look like "a-autoid-2-offer-1"; that offer's price is in "#aod-price-1".
+                price = parse_price(btn.evaluate("""el => {
+                    const m = (el.closest('[id*="-offer-"]') || {}).id?.match(/-offer-(\\d+)$/);
+                    const box = m && document.getElementById('aod-price-' + m[1]);
+                    const p = box && (box.querySelector('.a-price:not(.a-text-price)') || box.querySelector('.a-price'));
+                    if (!p) return null;
+                    const off = p.querySelector('.a-offscreen');
+                    return (off && off.textContent.trim()) || p.textContent; }"""))
+            except PWError:
+                continue
+            offers.append((price if price is not None else float("inf"), i, btn))
+        if not offers:
+            self.status(p, f"Other sellers: none in stock (checked {datetime.now():%H:%M:%S})", "black")
+            return None
+
+        allowed = [o for o in offers if p.max_price is None or o[0] <= p.max_price]
+        if not allowed:
+            self.status(p, f"Other sellers from ${min(o[0] for o in offers):,.2f} - above max price", "orange")
+            return None
+        price, _, btn = min(allowed, key=lambda o: (o[0], o[1]))
+        return btn, (None if price == float("inf") else price)
+
+    def _checkout_from_cart(self, page, p: Product, asin) -> str:
+        page.goto(f"{BASE_URL}/gp/cart/view.html", wait_until="domcontentloaded")
+        page.wait_for_timeout(1500)
+        if not self._isolate_in_cart(page, p, asin):
+            return "failed"
+        self._set_cart_quantity(page, p, asin)
         return self._complete_checkout(page)
+
+    def _cart_asins(self, page):
+        items = page.locator(CART_ITEM_SELECTOR)
+        return items, [(items.nth(i).get_attribute("data-asin") or "").upper() for i in range(items.count())]
+
+    def _isolate_in_cart(self, page, p: Product, asin) -> bool:
+        """Move every other cart item to 'Guardar para más tarde' so only this product is bought."""
+        moved = 0
+        for _ in range(40):
+            items, asins = self._cart_asins(page)
+            if not asins:
+                self.log(f"{p.label}: the product didn't appear in the cart.", "error")
+                return False
+            if asin is None:
+                if len(asins) == 1:
+                    return True
+                self.log(f"{p.label}: cart has other items and the product ID is unknown, not checking out.", "error")
+                return False
+            others = [i for i, a in enumerate(asins) if a != asin]
+            if not others:
+                break
+            btn = items.nth(others[0]).locator(SAVE_FOR_LATER_SELECTOR).first
+            if not btn.count():
+                self.log(f"{p.label}: couldn't move other cart items aside, not checking out "
+                         "(it would buy the whole cart). Please empty the cart.", "error")
+                return False
+            btn.click()
+            moved += 1
+            page.wait_for_timeout(2500)
+            # The moved item stays in the list as a "se ha movido" placeholder until the cart reloads.
+            page.reload(wait_until="domcontentloaded")
+            page.wait_for_timeout(1500)
+        else:
+            return False
+        if moved:
+            self.log(f"Moved {moved} other cart item(s) to 'Guardar para más tarde' so only this product is bought.")
+        return True
+
+    def _set_cart_quantity(self, page, p: Product, asin):
+        if p.quantity <= 1:
+            return
+        try:
+            item = page.locator(f"{CART_ITEM_SELECTOR}[data-asin='{asin}']").first if asin else \
+                page.locator(CART_ITEM_SELECTOR).first
+            sel = item.locator("select[name='quantity']").first
+            if sel.count():
+                values = sel.locator("option").evaluate_all("els => els.map(e => e.value)")
+                if str(p.quantity) in values:
+                    sel.select_option(str(p.quantity), force=True)
+                    page.wait_for_timeout(2500)
+                    return
+            plus = item.locator("[data-a-selector='increment'], button[aria-label*='Aumentar' i]").first
+            if plus.count():
+                current = int(item.get_attribute("data-quantity") or 1)
+                for _ in range(max(0, p.quantity - current)):
+                    plus.click()
+                    page.wait_for_timeout(1200)
+                return
+        except (PWError, ValueError):
+            logger.exception("Could not set cart quantity")
+        self.log(f"{p.label}: couldn't set quantity {p.quantity} in the cart, buying the quantity shown there.",
+                 "error")
 
     @staticmethod
     def _order_confirmed(page) -> bool:
