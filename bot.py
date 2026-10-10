@@ -47,7 +47,7 @@ ADD_TO_CART_SELECTORS = ["#add-to-cart-button", "input[name='submit.add-to-cart'
 AOD_ADD_SELECTOR = "#aod-container input[name='submit.addToCart'], #all-offers-display input[name='submit.addToCart']"
 CART_ITEM_SELECTOR = "#sc-active-cart [data-itemtype='active'][data-asin]"
 SAVE_FOR_LATER_SELECTOR = ("input[name^='submit.save-for-later'], input[data-action='save-for-later'], "
-                           "input[value*='Guardar para' i]")
+                           "input[value*='Guardar para' i], input[value*='Save for later' i]")
 
 PRICE_SELECTORS = [
     "#corePrice_feature_div .a-price .a-offscreen",
@@ -70,7 +70,7 @@ PLACE_ORDER_SELECTORS = [
     "#placeOrder",
 ]
 PLACE_ORDER_RE = re.compile(
-    r"realiza(r)?\s+(el\s+|tu\s+|su\s+)?pedido|place\s+your\s+order|confirmar\s+(la\s+)?compra", re.I
+    r"realiza(r)?\s+(el\s+|tu\s+|su\s+)?pedido|place\s+(your\s+)?order|confirmar\s+(la\s+)?compra", re.I
 )
 # Any checkout button whose label matches this is treated as the final purchase button.
 FINAL_BUTTON_RE = re.compile(r"pedido|comprar|pagar\s+ahora|place|buy|confirm", re.I)
@@ -95,10 +95,11 @@ DECLINE_SELECTORS = [
     "#prime-declineCTA",
     "a[id*='nothanks' i]",
 ]
-DECLINE_RE = re.compile(r"^\s*no,?\s+gracias|^\s*no\s+thanks", re.I)
+# Amazon MX shows Spanish or English depending on the account's language setting.
+DECLINE_RE = re.compile(r"^\s*no,?\s+(gracias|thanks)", re.I)
 
 SUCCESS_RE = re.compile(
-    r"pedido\s+(ha\s+sido\s+)?realizado|se\s+realiz[oó]\s+(tu|su)\s+pedido|gracias,?\s+(tu|su)\s+pedido|order\s+placed",
+    r"pedido\s+(ha\s+sido\s+)?realizado|se\s+realiz[oó]\s+(tu|su)\s+pedido|gracias,?\s+(tu|su)\s+pedido|order\s+(has\s+been\s+)?placed",
     re.I,
 )
 
@@ -605,7 +606,8 @@ class AmazonBot(threading.Thread):
         page.wait_for_timeout(1500)
         if not self._isolate_in_cart(page, p, asin):
             return "failed"
-        self._set_cart_quantity(page, p, asin)
+        if not self._set_cart_quantity(page, p, asin):
+            return "failed"
         return self._complete_checkout(page)
 
     def _cart_asins(self, page):
@@ -645,30 +647,40 @@ class AmazonBot(threading.Thread):
             self.log(f"Moved {moved} other cart item(s) to 'Guardar para más tarde' so only this product is bought.")
         return True
 
-    def _set_cart_quantity(self, page, p: Product, asin):
-        if p.quantity <= 1:
-            return
+    def _set_cart_quantity(self, page, p: Product, asin) -> bool:
+        """Set the exact quantity in the cart (a retry may have added the product twice).
+        Returns False if the cart would buy MORE than requested."""
+        item_sel = f"{CART_ITEM_SELECTOR}[data-asin='{asin}']" if asin else CART_ITEM_SELECTOR
+        current = None
         try:
-            item = page.locator(f"{CART_ITEM_SELECTOR}[data-asin='{asin}']").first if asin else \
-                page.locator(CART_ITEM_SELECTOR).first
-            sel = item.locator("select[name='quantity']").first
-            if sel.count():
-                values = sel.locator("option").evaluate_all("els => els.map(e => e.value)")
-                if str(p.quantity) in values:
+            for _ in range(60):
+                item = page.locator(item_sel).first
+                current = int(item.get_attribute("data-quantity") or 1)
+                if current == p.quantity:
+                    return True
+                sel = item.locator("select[name='quantity']").first
+                if sel.count():
+                    values = sel.locator("option").evaluate_all("els => els.map(e => e.value)")
+                    if str(p.quantity) not in values:
+                        break
                     sel.select_option(str(p.quantity), force=True)
                     page.wait_for_timeout(2500)
-                    return
-            plus = item.locator("[data-a-selector='increment'], button[aria-label*='Aumentar' i]").first
-            if plus.count():
-                current = int(item.get_attribute("data-quantity") or 1)
-                for _ in range(max(0, p.quantity - current)):
-                    plus.click()
-                    page.wait_for_timeout(1200)
-                return
+                    continue
+                step = "increment" if current < p.quantity else "decrement"
+                btn = item.locator(f"[data-a-selector='{step}']").first
+                if not btn.count():
+                    break
+                btn.click()
+                page.wait_for_timeout(1500)
         except (PWError, ValueError):
             logger.exception("Could not set cart quantity")
+        if current is not None and current > p.quantity:
+            self.log(f"{p.label}: the cart has {current} units but you asked for {p.quantity}; "
+                     "not checking out.", "error")
+            return False
         self.log(f"{p.label}: couldn't set quantity {p.quantity} in the cart, buying the quantity shown there.",
                  "error")
+        return True
 
     @staticmethod
     def _order_confirmed(page) -> bool:
@@ -710,7 +722,7 @@ class AmazonBot(threading.Thread):
             page.get_by_role("button", name=DECLINE_RE),
             page.get_by_role("link", name=DECLINE_RE),
             # e.g. the Prime sign-up page, where "No gracias" is a plain styled element
-            page.get_by_text(re.compile(r"^\s*no,?\s+gracias\s*$", re.I)),
+            page.get_by_text(re.compile(r"^\s*no,?\s+(gracias|thanks)\s*$", re.I)),
         ]
         for cand in candidates:
             try:
