@@ -234,7 +234,6 @@ class AmazonBot(threading.Thread):
 
     def _launch_browser(self, pw):
         common = dict(
-            user_data_dir=str(PROFILE_DIR),
             headless=False,
             no_viewport=True,
             locale="es-MX",
@@ -242,9 +241,11 @@ class AmazonBot(threading.Thread):
             ignore_default_args=["--enable-automation"],
         )
         last_error = None
-        for channel, name in (("msedge", "Microsoft Edge"), ("chrome", "Google Chrome")):
+        for channel, name in (("chrome", "Google Chrome"), ("msedge", "Microsoft Edge")):
             try:
-                ctx = pw.chromium.launch_persistent_context(channel=channel, **common)
+                # Separate profile per browser: Chrome and Edge can't share one profile folder.
+                ctx = pw.chromium.launch_persistent_context(
+                    user_data_dir=str(PROFILE_DIR / channel), channel=channel, **common)
                 self.log(f"Opened {name}.")
                 return ctx
             except PWError as e:
@@ -277,6 +278,16 @@ class AmazonBot(threading.Thread):
             raise BrowserClosed() from e
         if page.is_closed():
             raise BrowserClosed()
+
+    @staticmethod
+    def _tick_remember_me(page):
+        """Tick Amazon's 'Keep me signed in' box, otherwise the login is lost when the browser closes."""
+        try:
+            box = page.locator("input[name='rememberMe']").first
+            if box.count() and not box.is_checked():
+                box.check(force=True)
+        except PWError:
+            pass
 
     def _monitor(self, ctx, page):
         while not self.stopped:
@@ -323,7 +334,7 @@ class AmazonBot(threading.Thread):
     @staticmethod
     def _human_needed(page) -> str | None:
         url = page.url.lower()
-        if any(s in url for s in ("/ap/signin", "/ap/mfa", "/ap/cvf", "/ap/challenge", "/ap/forgotpassword")):
+        if any(s in url for s in ("/ap/signin", "/ap/mfa", "/ap/cvf", "/ap/challenge", "/ap/forgotpassword", "/ax/claim")):
             return "Amazon is asking you to sign in / verify (OTP). Please complete it in the browser window."
         try:
             if "validatecaptcha" in url or page.locator("form[action*='validateCaptcha']").count():
@@ -348,6 +359,7 @@ class AmazonBot(threading.Thread):
         self.alert(reason)
         while not self.stopped:
             self._wait_on_page(page, 2)
+            self._tick_remember_me(page)
             if not self._human_needed(page):
                 self.log("Verification completed, continuing.")
                 return True
@@ -367,8 +379,9 @@ class AmazonBot(threading.Thread):
             pass
         while not self.stopped:
             self._wait_on_page(page, 2)
+            self._tick_remember_me(page)
             try:
-                if "/ap/" not in page.url and self._is_logged_in(page):
+                if "/ap/" not in page.url and "/ax/" not in page.url and self._is_logged_in(page):
                     return True
             except PWError:
                 continue

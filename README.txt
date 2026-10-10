@@ -1,7 +1,7 @@
 AMAZON MEXICO BOT - HOW TO USE
 ==============================
 
-Requirements: Windows 10/11 with Microsoft Edge (already on every Windows PC) or Google Chrome.
+Requirements: Windows 10/11 with Google Chrome (Microsoft Edge is used if Chrome isn't installed).
 
 1. Double-click AmazonMXBot.exe.
 2. Paste up to 5 amazon.com.mx product links. For each one, set:
@@ -9,7 +9,8 @@ Requirements: Windows 10/11 with Microsoft Edge (already on every Windows PC) or
    - Max price (optional): the bot won't buy if the price is above this. Leave empty for no limit.
 3. Click START. A browser window opens.
    - FIRST TIME ONLY: sign in to your Amazon account in that window (including the OTP code).
-     The bot remembers your login after that.
+     Keep "Mantener la sesión iniciada" ticked (the bot ticks it for you) so the
+     bot remembers your login after that.
 4. The bot checks stock every 10-30 seconds. When a product is in stock, it buys it
    right away using your DEFAULT shipping address and payment method.
    Each product is bought once, then the bot stops watching it.
