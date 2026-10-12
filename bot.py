@@ -211,6 +211,12 @@ class AmazonBot(threading.Thread):
     def screenshot(self, page, p: Product, tag):
         path = SCREENSHOT_DIR / f"{datetime.now():%Y%m%d_%H%M%S}_slot{p.slot}_{tag}.png"
         try:
+            # Let the page finish rendering, otherwise the capture can come out blank.
+            try:
+                page.wait_for_load_state("load", timeout=10000)
+            except PWTimeout:
+                pass
+            page.wait_for_timeout(1500)
             page.screenshot(path=str(path), full_page=False)
             logger.info("Screenshot saved: %s", path)
         except PWError:
