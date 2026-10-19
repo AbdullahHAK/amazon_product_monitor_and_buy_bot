@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Amazon México Auto-Buy",
+  "version": "1.0.0",
+  "description": "Monitors up to 5 amazon.com.mx products and buys each one as soon as it is in stock.",
+  "permissions": ["storage", "notifications", "tabs"],
+  "host_permissions": ["https://www.amazon.com.mx/*", "https://ntfy.sh/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Amazon México Auto-Buy" },
+  "icons": { "128": "icon.png" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.amazon.com.mx/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

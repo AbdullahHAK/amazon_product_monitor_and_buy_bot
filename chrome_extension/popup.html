@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Amazon México Auto-Buy</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="icon.png" alt="">
+      <div>
+        <h1>Auto-Buy</h1>
+        <p>amazon.com.mx</p>
+      </div>
+    </div>
+    <div id="state" class="state idle"><span class="dot"></span><span id="stateText">Idle</span></div>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="section-title">
+        <h2>Products</h2>
+        <span class="hint">Buys each one the moment it's in stock</span>
+      </div>
+      <div id="products"></div>
+    </section>
+
+    <section class="card settings">
+      <div class="setting">
+        <div>
+          <div class="setting-name">Check interval</div>
+          <div class="hint">Random delay between full checks</div>
+        </div>
+        <div class="interval">
+          <input id="minInt" type="number" min="5" max="600" value="10">
+          <span>–</span>
+          <input id="maxInt" type="number" min="5" max="600" value="30">
+          <span class="unit">sec</span>
+        </div>
+      </div>
+      <div class="setting">
+        <div>
+          <div class="setting-name">Test mode</div>
+          <div class="hint">Goes to checkout, never places the order</div>
+        </div>
+        <label class="switch"><input id="testMode" type="checkbox"><span></span></label>
+      </div>
+      <details class="setting-more">
+        <summary>Phone alerts <span class="hint">(optional)</span></summary>
+        <div class="hint">Install the free <b>ntfy</b> app, subscribe to a private topic name and enter it here.
+          You'll get a push when an order is placed or Amazon needs you (CAPTCHA / OTP).</div>
+        <input id="ntfyTopic" type="text" placeholder="e.g. davide-amazon-7f3k" spellcheck="false">
+      </details>
+    </section>
+
+    <div class="actions">
+      <button id="start" class="btn primary">Start</button>
+      <button id="stop" class="btn danger" disabled>Stop</button>
+    </div>
+    <div id="error" class="error" hidden></div>
+
+    <section class="card log-card">
+      <div class="section-title">
+        <h2>Activity</h2>
+        <span id="nextCheck" class="hint"></span>
+      </div>
+      <ol id="log"><li class="empty">Nothing yet. Press Start.</li></ol>
+    </section>
+  </main>
+
+  <template id="productRow">
+    <div class="product">
+      <div class="slot"></div>
+      <div class="fields">
+        <input class="url" type="url" placeholder="https://www.amazon.com.mx/dp/..." spellcheck="false">
+        <div class="row">
+          <label>Qty <input class="qty" type="number" min="1" max="99" value="1"></label>
+          <label>Max $ <input class="max" type="number" min="0" step="0.01" placeholder="no limit"></label>
+          <span class="status muted">Idle</span>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <script src="popup.js"></script>
+</body>
+</html>

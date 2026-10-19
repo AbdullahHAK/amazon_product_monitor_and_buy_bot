@@ -71,6 +71,26 @@ Every product is bought **once**. If *Place order* was clicked but Amazon's conf
 
 > **Requirements:** Windows 10/11 with Google Chrome (falls back to Microsoft Edge). Set your default shipping address and payment method in Amazon beforehand.
 
+## 🧩 Chrome extension (alternative to the desktop app)
+
+The same bot also comes as a **Chrome extension** in [`chrome_extension/`](chrome_extension). It runs inside your everyday Chrome, where you're already logged in to Amazon, so there's nothing to install apart from the extension.
+
+<img src="docs/extension-running.png" alt="Chrome extension popup" width="340" align="right">
+
+**Install**
+1. Open `chrome://extensions` and switch on **Developer mode** (top right).
+2. Click **Load unpacked** and select the `chrome_extension` folder.
+3. Pin the extension, open it, paste your product links and press **Start**.
+
+**What's in it**
+- The same features as the desktop app: Buy Box and *other sellers* buying, cart isolation, exact quantity, Test mode and a live activity log.
+- It runs in its own **bot tab**. Keep that tab open (it can stay in the background).
+- It skips **Kindle "1-Click"**, **pre-orders** and **back-orders** (*"No disponible por el momento"*), and reports a disabled payment step as *"add a payment method"*.
+- **CAPTCHA / OTP:** it pauses, shows a desktop notification, focuses the tab and continues by itself once you've completed it.
+- **Phone alerts (optional):** enter an [ntfy](https://ntfy.sh) topic and get a push on your phone for every order and every *action needed*.
+
+<br clear="right">
+
 ## 🛠️ Build from source
 
 ```bat
@@ -97,6 +117,7 @@ amazon_bot/
 ├── build.bat         # One-click PyInstaller build → dist\AmazonMXBot.exe
 ├── requirements.txt
 ├── README.txt        # Short how-to shipped to the end user
+├── chrome_extension/ # Manifest V3 extension: popup UI, background worker, content script
 └── docs/             # README images
 ```
 
