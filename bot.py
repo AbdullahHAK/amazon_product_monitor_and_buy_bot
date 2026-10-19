@@ -749,6 +749,26 @@ class AmazonBot(threading.Thread):
         except PWError:
             return ""
 
+    def _handle_customs_step(self, page) -> bool:
+        """Imported items add a customs step: "Agregar RFC o CURP para despacho de aduana".
+        Choose "Omitir por ahora" (skip for now) and press that section's Continuar button."""
+        skip = page.get_by_text(re.compile(r"^\s*(omitir por ahora|skip for now)\s*$", re.I)).first
+        if not (skip.count() and skip.is_visible()):
+            return False
+        skip.click()
+        page.wait_for_timeout(1000)
+        form = skip.locator("xpath=ancestor::form[1]")
+        scope = form if form.count() else page
+        buttons = scope.get_by_role("button", name=re.compile(r"continuar|continue", re.I))
+        for i in reversed(range(buttons.count())):  # the section's button comes after the summary's
+            btn = buttons.nth(i)
+            if btn.is_visible() and btn.is_enabled():
+                self.log("Customs step (RFC/CURP): chose 'Omitir por ahora'.")
+                btn.click()
+                page.wait_for_timeout(2500)
+                return True
+        return False
+
     def _complete_checkout(self, page) -> str:
         deadline = time.time() + 120
         order_clicked = False
@@ -779,6 +799,9 @@ class AmazonBot(threading.Thread):
                 if decline:
                     decline.click()
                     page.wait_for_timeout(1500)
+                    continue
+
+                if self._handle_customs_step(page):
                     continue
 
                 cont = first_visible(page, CONTINUE_SELECTORS)

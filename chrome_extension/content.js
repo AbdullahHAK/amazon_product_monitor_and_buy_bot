@@ -397,6 +397,28 @@
     return null;
   }
 
+  // Imported items add a customs step (/kyc): "Agregar RFC o CURP para despacho de aduana".
+  // Choose "Omitir por ahora" (skip for now) and press that section's own Continuar button.
+  async function handleCustomsStep() {
+    const skip = $$("label, span.a-label, span.a-radio-label").find((el) => visible(el) && /^\s*(omitir por ahora|skip for now)\s*$/i.test(text(el)));
+    if (!skip) return false;
+    const radio = skip.closest("label")?.querySelector("input[type='radio']")
+      || skip.closest(".a-radio")?.querySelector("input[type='radio']");
+    if (radio && !radio.checked) {
+      skip.click();
+      await log("Customs step (RFC/CURP): choosing 'Omitir por ahora'.");
+      await sleep(1000);
+    }
+    const section = skip.closest("form") || skip.closest(".a-box, section, [data-testid]") || document;
+    const isContinue = (el) => visible(el) && !isDisabled(el) && /continuar|continue/i.test(label(el));
+    const btn = $$("input[type='submit'], button", section).find(isContinue)
+      || $$("input[type='submit'], button").filter(isContinue).pop(); // the section's button comes after the summary's
+    if (!btn) return false;
+    btn.click();
+    await sleep(2500);
+    return true;
+  }
+
   async function doCheckout(run) {
     const i = run.idx;
     const p = run.products[i];
@@ -442,6 +464,7 @@
         await sleep(1500);
         continue;
       }
+      if (await handleCustomsStep()) continue;
       if (cont) {
         if (isDisabled(cont)) {
           await log(`${name(p)}: checkout is blocked - the account has no usable payment method. Add a card in Amazon.`, "alert");
